@@ -3,29 +3,32 @@ import numpy as np
 import matplotlib.pyplot as plt
 import argparse
 import colorsys
-from collections import defaultdict
-from aux_routines import *
+from collections import defaultdict,OrderedDict
+from aiida.workflows.user.hpc_workflow.postprocessing.aux_routines import *
+import sys
+import operator
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("workflow_pk",type=int,nargs='+',help="workflow number")
+parser.add_argument("scale",type=str,help="scale for structures")
 args = parser.parse_args()
-scale = str([3,2,2])
+scale = args.scale
 
-
-#nomi = []
 times = defaultdict(list)
 wfpk = defaultdict(list)
 structures = defaultdict(list)
 labels = defaultdict(list)
-count_wf=0
+count_wf = 0
 string_for_title=defaultdict(list)
 computer_cores = []
 calculation_PK = defaultdict(list)
 number_of_iterations = defaultdict(list)
+extras = defaultdict(list)
 
 
-for wf_pk in args.workflow_pk:
+
+for num_work, wf_pk in enumerate(args.workflow_pk):
     wf = load_workflow(wf_pk)
     subworkflows = wf.get_steps()[1].get_sub_workflows()
     count_sub_wf=0
@@ -35,18 +38,25 @@ for wf_pk in args.workflow_pk:
         keys=list(calc[0].get_inputs_dict()['structure'].get_composition().viewkeys())
         name=''
         names = []
-        if count_sub_wf is 0:
-            count_sub_wf+=1
-            computer_MPI = calc[0].get_computer().get_default_mpiprocs_per_machine()
-            computer_cores.append(computer_MPI)
         for q in range(len(values)):
            name+=keys[q]+str(values[q])
         names.append(name)
         structure = name
+        if count_sub_wf is 0:
+            count_sub_wf+=1
+            computer_MPI = calc[0].get_computer().get_default_mpiprocs_per_machine()
+            computer_cores.append(computer_MPI)
         nomi = []
         tempi = []
         count_wf_calc=0
         for j in calc[1:]:
+            try:
+               sys_type = j.get_extras()['system type']['type']
+            except AttributeError:
+               sys_type = None
+
+            if num_work is 0:
+               extras[sys_type].append(structure)
             kpoints=j.get_extras()['parallelization_dict']['nk']
             name='nk_'
             name+=str(kpoints)
@@ -55,6 +65,7 @@ for wf_pk in args.workflow_pk:
               try:
                  tempi.append(j.res.wall_time_seconds)
                  number_of_iterations[structure].append(j.res.total_number_of_scf_iterations)
+
               except AttributeError:
                  tempi.append(0.0)
                  number_of_iterations[structure].append(0)
@@ -63,7 +74,6 @@ for wf_pk in args.workflow_pk:
               string_for_title[structure].append(structure+'_nk_'+str(nkpoints)+'_cutoff_'+str(cutoff))
             else:
               tempi.append(0.0)
-              energie.append(0.0)
               string_for_title[structure].append(structure)
             nomi.append(name)
             calculation_PK[structure].append(j)
@@ -74,9 +84,20 @@ for wf_pk in args.workflow_pk:
         for k in tempi:
             times[structure].append(k)
             wfpk[structure].append(count_wf)
-            computer=str(subworkflows[0].get_all_calcs()[1].get_code()).split()[4][:-1]
+            #computer=str(subworkflows[0].get_all_calcs()[1].get_code()).split()[4][:-1]
+            computer=wf.get_parameters()['pw_codename_0']
             labels[structure].append(computer)
+
     count_wf+=1
+
+#for k,v in sorted_times.items():
+#   print k,v
+#k in extras and extras[v] == k])
+#intersection = keys_a & keys_b
+#print intersection
+#for k,v in times.iteritems():
+#  print k,v
+#sys.exit()
 
 #for k,v in labels.iteritems():
 #    v[4] = 'PizDaintGPU'
@@ -101,10 +122,19 @@ for i in structures:
     print 'Struct #',i, times[i], number_of_iterations[i], all_same(number_of_iterations[i]),  (all(times[i])>0.0), len(times[i]),len(args.workflow_pk)
     if all_same(number_of_iterations[i]) and (all(times[i])>0.0) and (len(times[i]) is len(args.workflow_pk)):
        new_array[i].append(times[i])
-    if(all(times[i])>0.0) and (len(times[i]) is len(args.workflow_pk)):
+    else:
        new_array_all[i].append(times[i])
        iterations_completed[i].append(number_of_iterations[i])
-       
+
+sorted_times = OrderedDict(sorted(new_array.iteritems(),key=operator.itemgetter(1)))
+d_inter = {}
+for k,v in extras.iteritems():
+    d_inter[k] = OrderedDict()
+    for k1,v1 in sorted_times.items():
+        if k1 in v:
+            d_inter[k][k1] = v1
+print d_inter
+      
     
 print 'Calculations with the same number of iterations:'
 print ''
@@ -144,22 +174,19 @@ def create_plots(figure,array,title,ind,width,colors,labels_plot,nome_file):
     ax.set_ylabel('Time(s)')
     ax.set_title(title)
     ax.set_xticks(ind)
-    ax.legend(tts,labels_plot,loc='upper center',ncol=3, bbox_to_anchor=(0.5,1.25))
+    ax.legend(tts,labels_plot,loc='upper center',ncol=3, bbox_to_anchor=(0.5,1.25), fontsize=10)
     plt.savefig(nome_file)
 
 
-print 'AAAAA', values_summary_plot, labels_plot
 create_plots(0,values_summary_plot,'Average times - per node '+scale,
             ind,width,colors,labels_plot,'riassunto_node.png')
 
-create_plots(1,values_summary_plot_all*computer_summary_plot,'Average times - per core'+scale,
+create_plots(1,values_summary_plot*computer_summary_plot,'Average times - per core'+scale,
             ind,width,colors,labels_plot,'riassunto_core.png')
-create_plots(2,values_summary_plot_all,'Average times - per node'+scale,
+create_plots(2,values_summary_plot,'Average times - per node'+scale,
             ind,width,colors,labels_plot,'riassunto_node_all.png')
-create_plots(3,values_summary_plot_iterations,'Average number of iterations'+scale,
-            ind,width,colors,labels_plot,'riassunto_iterations.png')
-
-
+#create_plots(3,values_summary_plot_iterations,'Average number of iterations'+scale,
+#            ind,width,colors,labels_plot,'riassunto_iterations.png')
 
 for t in xrange(0,len(structures)):
     
@@ -184,7 +211,6 @@ for t in xrange(0,len(structures)):
 
 
     ax.set_ylabel('Time(s)')
-
     ax.set_title(string_for_title.values()[t][0])
     ax.set_xticks(ind)
     ax.set_xticklabels(structures.values()[t][0:len(ind)],rotation=45)
@@ -197,5 +223,28 @@ for t in xrange(0,len(structures)):
 
     fig, bx = plt.subplots()
 
-
-
+#nodes_by_formula = {}
+#for gr in groups:
+#    nodes_by_formula[gr['nickname']] = \
+#        OrderedDict(sorted({node.inp.structure.get_formula(): node for node in gr['group'].nodes if node.get_state() == 'FINISHED'}.items(), key=lambda t: t[1].get_extra("magnetism")))
+#formulas_common = set.intersection( *[set(v.keys()) for v in new_array.itervalues()] )
+#for gr in new_array:
+plt.clf()
+fig, axes = plt.subplots(1,4)
+l=0
+for i,k in enumerate(extras.keys()):
+    ax = axes[i]
+     
+    labels = []
+    values = []
+    for j,v in d_inter[k].iteritems():
+       labels.append(j)
+       values.append(v[0])
+    #print labels, values
+    ax.set_yscale('log')
+    ax.plot(values)
+    plt.sca(ax)
+    plt.xticks(range(len(labels)), labels, rotation='vertical')
+    #for j,v in d_inter[k]:
+    #   print v
+fig.savefig('pippo.png', dpi=180)
